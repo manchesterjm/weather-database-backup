@@ -20,6 +20,7 @@ import sys
 # Configuration
 DB_PATH = "/mnt/d/Scripts/weather_data/weather.db"
 WUNDERMAP_URL = "https://www.wunderground.com/wundermap?lat=38.9194&lon=-104.7509&zoom=12"
+SHOT_SCRAPER = "/home/josh/.local/bin/shot-scraper"  # Full path for scheduled tasks
 
 # JavaScript to extract temperature data from WunderMap
 EXTRACT_JS = """
@@ -62,7 +63,7 @@ def extract_pws_data():
 
     try:
         result = subprocess.run(
-            ['shot-scraper', 'javascript', WUNDERMAP_URL, EXTRACT_JS],
+            [SHOT_SCRAPER, 'javascript', WUNDERMAP_URL, EXTRACT_JS],
             capture_output=True,
             text=True,
             timeout=90
