@@ -14,13 +14,31 @@ import subprocess
 import json
 import sqlite3
 import argparse
+import logging
+import time
 from datetime import datetime
+from pathlib import Path
 import sys
 
 # Configuration
 DB_PATH = "/mnt/d/Scripts/weather_data/weather.db"
 WUNDERMAP_URL = "https://www.wunderground.com/wundermap?lat=38.9194&lon=-104.7509&zoom=12"
 SHOT_SCRAPER = "/home/josh/.local/bin/shot-scraper"  # Full path for scheduled tasks
+LOG_FILE = "/mnt/d/Scripts/pws_capture.log"
+MIN_STATIONS = 20  # Minimum stations required for valid data
+MAX_RETRIES = 3
+RETRY_DELAY = 30  # seconds between retries
+
+# Set up logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s [%(levelname)s] %(message)s',
+    handlers=[
+        logging.FileHandler(LOG_FILE),
+        logging.StreamHandler()
+    ]
+)
+logger = logging.getLogger(__name__)
 
 # JavaScript to extract temperature data from WunderMap
 EXTRACT_JS = """
@@ -59,7 +77,7 @@ new Promise(done => setTimeout(() => {
 
 def extract_pws_data():
     """Use shot-scraper to extract PWS data from WunderMap."""
-    print(f"[{datetime.now().strftime('%H:%M:%S')}] Fetching WunderMap data...")
+    logger.info("Fetching WunderMap data...")
 
     try:
         result = subprocess.run(
@@ -70,28 +88,60 @@ def extract_pws_data():
         )
 
         if result.returncode != 0:
-            print(f"Error: shot-scraper failed: {result.stderr}")
+            logger.error(f"shot-scraper failed (exit {result.returncode}): {result.stderr}")
             return None
 
         data = json.loads(result.stdout)
         return data
 
     except subprocess.TimeoutExpired:
-        print("Error: shot-scraper timed out")
+        logger.error("shot-scraper timed out (90s)")
         return None
     except json.JSONDecodeError as e:
-        print(f"Error: Failed to parse JSON: {e}")
-        print(f"Raw output: {result.stdout[:200]}")
+        logger.error(f"Failed to parse JSON: {e}")
+        logger.debug(f"Raw output: {result.stdout[:200]}")
+        return None
+    except FileNotFoundError:
+        logger.error(f"shot-scraper not found at {SHOT_SCRAPER}")
         return None
     except Exception as e:
-        print(f"Error: {e}")
+        logger.error(f"Unexpected error: {e}")
         return None
+
+
+def extract_with_retry():
+    """Try to extract data with retries on failure."""
+    for attempt in range(1, MAX_RETRIES + 1):
+        logger.info(f"Attempt {attempt}/{MAX_RETRIES}")
+
+        data = extract_pws_data()
+
+        if data is None:
+            if attempt < MAX_RETRIES:
+                logger.warning(f"Extraction failed, retrying in {RETRY_DELAY}s...")
+                time.sleep(RETRY_DELAY)
+            continue
+
+        # Check minimum station count
+        station_count = data.get('tempCount', 0)
+        if station_count < MIN_STATIONS:
+            logger.warning(f"Only {station_count} stations (minimum: {MIN_STATIONS})")
+            if attempt < MAX_RETRIES:
+                logger.warning(f"Retrying in {RETRY_DELAY}s...")
+                time.sleep(RETRY_DELAY)
+            continue
+
+        # Success
+        return data
+
+    logger.error(f"All {MAX_RETRIES} attempts failed")
+    return None
 
 
 def save_to_database(data):
     """Save extracted PWS data to the weather database."""
     if not data or data.get('tempCount', 0) == 0:
-        print("No temperature data to save")
+        logger.warning("No temperature data to save")
         return False
 
     try:
@@ -118,15 +168,15 @@ def save_to_database(data):
         conn.commit()
         conn.close()
 
-        print(f"[{datetime.now().strftime('%H:%M:%S')}] Saved: {data['tempCount']} stations, "
-              f"temp range {data['minTemp']}-{data['maxTemp']}°F, avg {data['avgTemp']:.1f}°F")
+        logger.info(f"Saved: {data['tempCount']} stations, "
+                   f"range {data['minTemp']}-{data['maxTemp']}°F, avg {data['avgTemp']:.1f}°F")
         return True
 
     except sqlite3.IntegrityError:
-        print(f"Data for {hour_ts} already exists")
+        logger.warning(f"Data for {hour_ts} already exists")
         return False
     except Exception as e:
-        print(f"Database error: {e}")
+        logger.error(f"Database error: {e}")
         return False
 
 
@@ -135,21 +185,27 @@ def main():
     parser.add_argument('--test', action='store_true', help='Test extraction without saving')
     args = parser.parse_args()
 
-    data = extract_pws_data()
+    logger.info("=" * 50)
+    logger.info("PWS Data Capture started")
+
+    data = extract_with_retry()
 
     if not data:
-        print("Failed to extract data")
+        logger.error("Failed to extract valid data after all retries")
         sys.exit(1)
 
-    print(f"Extracted {data['tempCount']} temperatures from {data['markerCount']} markers")
-    print(f"Range: {data['minTemp']}°F to {data['maxTemp']}°F")
-    print(f"Average: {data['avgTemp']:.1f}°F")
+    logger.info(f"Extracted {data['tempCount']} temps from {data['markerCount']} markers")
+    logger.info(f"Range: {data['minTemp']}°F to {data['maxTemp']}°F, Avg: {data['avgTemp']:.1f}°F")
 
     if args.test:
-        print("\n[Test mode - not saving to database]")
+        logger.info("[Test mode - not saving to database]")
         print(f"Sample temps: {data['temps'][:20]}")
     else:
-        save_to_database(data)
+        if save_to_database(data):
+            logger.info("Capture complete")
+        else:
+            logger.error("Failed to save to database")
+            sys.exit(1)
 
 
 if __name__ == '__main__':
