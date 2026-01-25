@@ -27,7 +27,6 @@ Key features:
 
 import logging
 import sqlite3
-import sys
 import traceback
 import uuid
 from contextlib import contextmanager
@@ -123,7 +122,7 @@ def init_metrics_tables():
 
 
 @dataclass
-class ItemTracker:
+class ItemTracker:  # pylint: disable=too-many-instance-attributes
     """Tracks a single item being processed within a script run."""
     name: str
     item_type: Optional[str] = None
@@ -136,7 +135,7 @@ class ItemTracker:
 
 
 @dataclass
-class ScriptMetrics:
+class ScriptMetrics:  # pylint: disable=too-many-instance-attributes
     """
     Context manager for tracking script execution metrics.
 
@@ -273,7 +272,6 @@ class ScriptMetrics:
 
         succeeded = sum(1 for i in self.items.values() if i.status == "success")
         failed = sum(1 for i in self.items.values() if i.status == "failed")
-        total = len(self.items)
 
         if failed == 0:
             self.status = "success"
@@ -431,8 +429,8 @@ if __name__ == "__main__":
     # Quick test of the context manager
     print("\nTesting ScriptMetrics context manager...")
     with ScriptMetrics("test_script", expected_items=3) as metrics:
-        with metrics.track_item("item1", "test") as item:
-            item.records_inserted = 1
+        with metrics.track_item("item1", "test") as test_item:
+            test_item.records_inserted = 1
         metrics.item_succeeded("item2", records_inserted=2, item_type="test")
         metrics.item_failed("item3", "Test failure", item_type="test")
 
