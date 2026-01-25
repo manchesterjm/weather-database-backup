@@ -20,6 +20,8 @@ from datetime import datetime
 from pathlib import Path
 import sys
 
+from script_metrics import ScriptMetrics
+
 # Configuration
 DB_PATH = "/mnt/d/Scripts/weather_data/weather.db"
 WUNDERMAP_URL = "https://www.wunderground.com/wundermap?lat=38.9194&lon=-104.7509&zoom=12"
@@ -109,7 +111,7 @@ def extract_pws_data():
         return None
 
 
-def extract_with_retry():
+def extract_with_retry(metrics=None):
     """Try to extract data with retries on failure."""
     for attempt in range(1, MAX_RETRIES + 1):
         logger.info(f"Attempt {attempt}/{MAX_RETRIES}")
@@ -117,6 +119,10 @@ def extract_with_retry():
         data = extract_pws_data()
 
         if data is None:
+            error_msg = "Extraction returned None"
+            if metrics and attempt > 1:
+                metrics.record_retry(attempt, error_msg, error_type='ExtractionFailure',
+                                     item_name='pws_extraction')
             if attempt < MAX_RETRIES:
                 logger.warning(f"Extraction failed, retrying in {RETRY_DELAY}s...")
                 time.sleep(RETRY_DELAY)
@@ -125,7 +131,11 @@ def extract_with_retry():
         # Check minimum station count
         station_count = data.get('tempCount', 0)
         if station_count < MIN_STATIONS:
-            logger.warning(f"Only {station_count} stations (minimum: {MIN_STATIONS})")
+            error_msg = f"Only {station_count} stations (minimum: {MIN_STATIONS})"
+            if metrics and attempt > 1:
+                metrics.record_retry(attempt, error_msg, error_type='InsufficientData',
+                                     item_name='pws_extraction')
+            logger.warning(error_msg)
             if attempt < MAX_RETRIES:
                 logger.warning(f"Retrying in {RETRY_DELAY}s...")
                 time.sleep(RETRY_DELAY)
@@ -188,25 +198,38 @@ def main():
     logger.info("=" * 50)
     logger.info("PWS Data Capture started")
 
-    data = extract_with_retry()
+    with ScriptMetrics('capture_pws_data', expected_items=1) as metrics:
+        data = extract_with_retry(metrics)
 
-    if not data:
-        logger.error("Failed to extract valid data after all retries")
-        sys.exit(1)
-
-    logger.info(f"Extracted {data['tempCount']} temps from {data['markerCount']} markers")
-    logger.info(f"Range: {data['minTemp']}°F to {data['maxTemp']}°F, Avg: {data['avgTemp']:.1f}°F")
-
-    if args.test:
-        logger.info("[Test mode - not saving to database]")
-        print(f"Sample temps: {data['temps'][:20]}")
-    else:
-        if save_to_database(data):
-            logger.info("Capture complete")
+        if not data:
+            metrics.item_failed('pws_extraction', f"All {MAX_RETRIES} retries exhausted",
+                               item_type='data_extraction')
+            logger.error("Failed to extract valid data after all retries")
+            metrics.set_exit_code(1)
         else:
-            logger.error("Failed to save to database")
-            sys.exit(1)
+            logger.info(f"Extracted {data['tempCount']} temps from {data['markerCount']} markers")
+            logger.info(f"Range: {data['minTemp']}°F to {data['maxTemp']}°F, "
+                        f"Avg: {data['avgTemp']:.1f}°F")
+
+            if args.test:
+                logger.info("[Test mode - not saving to database]")
+                print(f"Sample temps: {data['temps'][:20]}")
+                metrics.item_succeeded('pws_extraction', records_inserted=0,
+                                       item_type='data_extraction')
+                metrics.add_note("Test mode - data not saved")
+            else:
+                if save_to_database(data):
+                    metrics.item_succeeded('pws_extraction', records_inserted=1,
+                                           item_type='data_extraction')
+                    logger.info("Capture complete")
+                else:
+                    metrics.item_failed('pws_extraction', "Database save failed",
+                                       item_type='data_extraction')
+                    logger.error("Failed to save to database")
+                    metrics.set_exit_code(1)
+
+    return metrics.exit_code
 
 
 if __name__ == '__main__':
-    main()
+    sys.exit(main())

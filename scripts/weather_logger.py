@@ -24,6 +24,8 @@ from pathlib import Path
 import requests
 from bs4 import BeautifulSoup
 
+from script_metrics import ScriptMetrics
+
 # Configuration
 SCRIPT_DIR = Path(__file__).parent
 DATA_DIR = SCRIPT_DIR / "weather_data"
@@ -1399,80 +1401,130 @@ def main():
     fetch_time = datetime.now().isoformat()
     logger.info(f"Fetch time: {fetch_time}")
 
-    # Fetch all data
-    forecast_data = fetch_json(FORECAST_URL)
-    hourly_data = fetch_json(HOURLY_URL)
-    alerts_data = fetch_json(ALERTS_URL)
-    digital_data = fetch_digital_forecast()
-    snowfall_data = fetch_noaa_snowfall()
-    daily_climate_data = fetch_iem_daily_climate()
-    observation_data = fetch_observations()
-    # Fetch METAR for all stations
-    metar_data_list = []
-    for station in METAR_STATIONS:
-        metar = fetch_metar(station)
-        if metar:
-            metar_data_list.append(metar)
+    # 8 data types: forecast, hourly, alerts, digital, snowfall, daily_climate, observations, metar
+    with ScriptMetrics('weather_logger', expected_items=8) as metrics:
+        # Fetch all data
+        forecast_data = fetch_json(FORECAST_URL)
+        hourly_data = fetch_json(HOURLY_URL)
+        alerts_data = fetch_json(ALERTS_URL)
+        digital_data = fetch_digital_forecast()
+        snowfall_data = fetch_noaa_snowfall()
+        daily_climate_data = fetch_iem_daily_climate()
+        observation_data = fetch_observations()
 
-    # Store data
-    conn = get_safe_connection()
+        # Fetch METAR for all stations
+        metar_data_list = []
+        for station in METAR_STATIONS:
+            metar = fetch_metar(station)
+            if metar:
+                metar_data_list.append(metar)
 
-    try:
-        if forecast_data:
-            store_forecast(conn, fetch_time, forecast_data)
-        else:
-            logger.error("No forecast data to store")
+        # Store data
+        conn = get_safe_connection()
 
-        if hourly_data:
-            store_hourly(conn, fetch_time, hourly_data)
-        else:
-            logger.error("No hourly data to store")
+        try:
+            # Forecast data (required)
+            if forecast_data:
+                store_forecast(conn, fetch_time, forecast_data)
+                periods = len(forecast_data.get("properties", {}).get("periods", []))
+                metrics.item_succeeded('forecast', records_inserted=periods,
+                                       item_type='nws_forecast')
+            else:
+                logger.error("No forecast data to store")
+                metrics.item_failed('forecast', "Failed to fetch NWS forecast",
+                                    item_type='nws_forecast')
 
-        if alerts_data:
-            store_alerts(conn, fetch_time, alerts_data)
-        else:
-            logger.error("No alerts data to store")
+            # Hourly data (required)
+            if hourly_data:
+                store_hourly(conn, fetch_time, hourly_data)
+                periods = len(hourly_data.get("properties", {}).get("periods", []))
+                metrics.item_succeeded('hourly', records_inserted=periods,
+                                       item_type='nws_hourly')
+            else:
+                logger.error("No hourly data to store")
+                metrics.item_failed('hourly', "Failed to fetch NWS hourly forecast",
+                                    item_type='nws_hourly')
 
-        if digital_data:
-            store_digital_forecast(conn, fetch_time, digital_data)
-        else:
-            logger.error("No digital forecast data to store")
+            # Alerts data (required - even if empty)
+            if alerts_data:
+                store_alerts(conn, fetch_time, alerts_data)
+                alert_count = len(alerts_data.get("features", []))
+                metrics.item_succeeded('alerts', records_inserted=alert_count,
+                                       item_type='nws_alerts')
+            else:
+                logger.error("No alerts data to store")
+                metrics.item_failed('alerts', "Failed to fetch NWS alerts",
+                                    item_type='nws_alerts')
 
-        if snowfall_data:
-            store_snowfall(conn, fetch_time, snowfall_data)
-        else:
-            logger.warning("No NOAA snowfall data to store (may not be available yet)")
+            # Digital forecast (required)
+            if digital_data:
+                store_digital_forecast(conn, fetch_time, digital_data)
+                metrics.item_succeeded('digital_forecast', records_inserted=len(digital_data),
+                                       item_type='nws_digital')
+            else:
+                logger.error("No digital forecast data to store")
+                metrics.item_failed('digital_forecast', "Failed to fetch digital forecast",
+                                    item_type='nws_digital')
 
-        if daily_climate_data:
-            store_daily_climate(conn, fetch_time, daily_climate_data)
-        else:
-            logger.warning("No IEM daily climate data to store")
+            # Snowfall data (optional - may not be available)
+            if snowfall_data:
+                store_snowfall(conn, fetch_time, snowfall_data)
+                metrics.item_succeeded('snowfall', records_inserted=len(snowfall_data),
+                                       item_type='noaa_snowfall')
+            else:
+                logger.warning("No NOAA snowfall data to store (may not be available yet)")
+                # Still mark as success since it's optional
+                metrics.item_succeeded('snowfall', records_inserted=0,
+                                       item_type='noaa_snowfall')
 
-        if observation_data:
-            store_observations(conn, fetch_time, observation_data)
-        else:
-            logger.error("No observation data to store")
+            # Daily climate data (optional)
+            if daily_climate_data:
+                store_daily_climate(conn, fetch_time, daily_climate_data)
+                metrics.item_succeeded('daily_climate', records_inserted=len(daily_climate_data),
+                                       item_type='iem_climate')
+            else:
+                logger.warning("No IEM daily climate data to store")
+                # Still mark as success since it's optional
+                metrics.item_succeeded('daily_climate', records_inserted=0,
+                                       item_type='iem_climate')
 
-        if metar_data_list:
-            for metar in metar_data_list:
-                store_metar(conn, fetch_time, metar)
-            logger.info(f"Processed METAR for {len(metar_data_list)} stations")
-        else:
-            logger.warning("No METAR data to store")
+            # Observation data (required)
+            if observation_data:
+                store_observations(conn, fetch_time, observation_data)
+                metrics.item_succeeded('observations', records_inserted=len(observation_data),
+                                       item_type='nws_observations')
+            else:
+                logger.error("No observation data to store")
+                metrics.item_failed('observations', "Failed to fetch NWS observations",
+                                    item_type='nws_observations')
 
-        conn.commit()
-        logger.info("All data committed to database")
+            # METAR data (required)
+            if metar_data_list:
+                for metar in metar_data_list:
+                    store_metar(conn, fetch_time, metar)
+                logger.info(f"Processed METAR for {len(metar_data_list)} stations")
+                metrics.item_succeeded('metar', records_inserted=len(metar_data_list),
+                                       item_type='airnav_metar')
+            else:
+                logger.warning("No METAR data to store")
+                metrics.item_failed('metar', "Failed to fetch METAR data",
+                                    item_type='airnav_metar')
 
-    except Exception as e:
-        logger.error(f"Database error: {e}")
-        conn.rollback()
-        raise
+            conn.commit()
+            logger.info("All data committed to database")
 
-    finally:
-        conn.close()
+        except Exception as e:
+            logger.error(f"Database error: {e}")
+            conn.rollback()
+            raise
 
-    logger.info("Weather Logger complete")
+        finally:
+            conn.close()
+
+        logger.info("Weather Logger complete")
+
+    return 0 if metrics.status in ("success", "partial") else 1
 
 
 if __name__ == "__main__":
-    main()
+    exit(main())
