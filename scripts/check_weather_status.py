@@ -17,18 +17,19 @@ import argparse
 import sys
 import sqlite3
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 from typing import Optional
 
-# Configuration
-SCRIPT_DIR = Path(__file__).parent
-DATA_DIR = SCRIPT_DIR / "weather_data"
-DB_PATH = DATA_DIR / "weather.db"
+import db_utils
+
+# Use paths from db_utils for consistency
+SCRIPT_DIR = db_utils.SCRIPTS_DIR
+DATA_DIR = db_utils.DATA_DIR
+DB_PATH = db_utils.DB_PATH
 
 
 def get_connection() -> sqlite3.Connection:
-    """Create a database connection."""
-    conn = sqlite3.connect(DB_PATH)
+    """Create a database connection with row factory."""
+    conn = db_utils.get_connection()
     conn.row_factory = sqlite3.Row
     return conn
 

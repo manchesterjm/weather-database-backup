@@ -24,12 +24,13 @@ from pathlib import Path
 import requests
 from bs4 import BeautifulSoup
 
+import db_utils
 from script_metrics import ScriptMetrics
 
-# Configuration
-SCRIPT_DIR = Path(__file__).parent
-DATA_DIR = SCRIPT_DIR / "weather_data"
-DB_PATH = DATA_DIR / "weather.db"
+# Configuration - use paths from db_utils for consistency
+SCRIPT_DIR = db_utils.SCRIPTS_DIR
+DATA_DIR = db_utils.DATA_DIR
+DB_PATH = db_utils.DB_PATH
 LOG_PATH = SCRIPT_DIR / "weather_logger.log"
 
 # NWS API endpoints for Colorado Springs
@@ -106,36 +107,9 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-def get_safe_connection() -> sqlite3.Connection:
-    """
-    Create a database connection with crash-resilient settings.
-
-    Uses WAL (Write-Ahead Logging) mode which:
-    - Prevents corruption during unexpected shutdowns
-    - Allows concurrent reads during writes
-    - Provides better performance for most workloads
-    """
-    conn = sqlite3.connect(DB_PATH)
-
-    # Enable WAL mode for crash resilience
-    conn.execute("PRAGMA journal_mode=WAL")
-
-    # NORMAL sync is safe with WAL mode (commits survive OS crashes)
-    # FULL is only needed if the storage device lies about flush
-    conn.execute("PRAGMA synchronous=NORMAL")
-
-    # Checkpoint WAL file every 1000 pages (~4MB) to prevent unbounded growth
-    conn.execute("PRAGMA wal_autocheckpoint=1000")
-
-    # Busy timeout: wait up to 5 seconds if database is locked
-    conn.execute("PRAGMA busy_timeout=5000")
-
-    return conn
-
-
 def init_database():
     """Create database tables if they don't exist."""
-    conn = get_safe_connection()
+    conn = db_utils.get_connection()
     cursor = conn.cursor()
 
     # 7-day forecast snapshots (14 periods: day/night alternating)
@@ -1420,7 +1394,7 @@ def main():
                 metar_data_list.append(metar)
 
         # Store data
-        conn = get_safe_connection()
+        conn = db_utils.get_connection()
 
         try:
             # Forecast data (required)
@@ -1510,7 +1484,7 @@ def main():
                 metrics.item_failed('metar', "Failed to fetch METAR data",
                                     item_type='airnav_metar')
 
-            conn.commit()
+            db_utils.commit_with_retry(conn, "final commit")
             logger.info("All data committed to database")
 
         except Exception as e:

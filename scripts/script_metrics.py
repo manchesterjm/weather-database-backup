@@ -32,30 +32,21 @@ import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Optional
 
-# Configuration
-SCRIPT_DIR = Path(__file__).parent
-DATA_DIR = SCRIPT_DIR / "weather_data"
-DB_PATH = DATA_DIR / "weather.db"
+import db_utils
+
+# Use paths from db_utils for consistency
+SCRIPT_DIR = db_utils.SCRIPTS_DIR
+DATA_DIR = db_utils.DATA_DIR
+DB_PATH = db_utils.DB_PATH
 
 logger = logging.getLogger(__name__)
 
 
-def get_metrics_connection() -> sqlite3.Connection:
-    """Create a database connection with crash-resilient settings."""
-    conn = sqlite3.connect(DB_PATH)
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA synchronous=NORMAL")
-    conn.execute("PRAGMA wal_autocheckpoint=1000")
-    conn.execute("PRAGMA busy_timeout=5000")
-    return conn
-
-
 def init_metrics_tables():
     """Create metrics tables if they don't exist."""
-    conn = get_metrics_connection()
+    conn = db_utils.get_connection()
     cursor = conn.cursor()
 
     # One row per script execution
@@ -197,7 +188,7 @@ class ScriptMetrics:  # pylint: disable=too-many-instance-attributes
         if not self._initialized:
             return
         try:
-            conn = get_metrics_connection()
+            conn = db_utils.get_connection()
             cursor = conn.cursor()
             cursor.execute("""
                 INSERT INTO script_runs (
@@ -223,7 +214,7 @@ class ScriptMetrics:  # pylint: disable=too-many-instance-attributes
         if not self._initialized:
             return
         try:
-            conn = get_metrics_connection()
+            conn = db_utils.get_connection()
             cursor = conn.cursor()
 
             # Calculate totals from items
@@ -319,7 +310,7 @@ class ScriptMetrics:  # pylint: disable=too-many-instance-attributes
         if not self._initialized:
             return
         try:
-            conn = get_metrics_connection()
+            conn = db_utils.get_connection()
             cursor = conn.cursor()
             cursor.execute("""
                 INSERT INTO script_run_items (
@@ -387,7 +378,7 @@ class ScriptMetrics:  # pylint: disable=too-many-instance-attributes
         if not self._initialized:
             return
         try:
-            conn = get_metrics_connection()
+            conn = db_utils.get_connection()
             cursor = conn.cursor()
             cursor.execute("""
                 INSERT INTO script_retries (

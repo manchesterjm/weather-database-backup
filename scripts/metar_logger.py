@@ -25,12 +25,13 @@ from pathlib import Path
 import requests
 from bs4 import BeautifulSoup
 
+import db_utils
 from script_metrics import ScriptMetrics
 
-# Configuration - use same paths as weather_logger.py
-SCRIPT_DIR = Path(__file__).parent
-DATA_DIR = SCRIPT_DIR / "weather_data"
-DB_PATH = DATA_DIR / "weather.db"
+# Configuration - use paths from db_utils for consistency
+SCRIPT_DIR = db_utils.SCRIPTS_DIR
+DATA_DIR = db_utils.DATA_DIR
+DB_PATH = db_utils.DB_PATH
 LOG_PATH = SCRIPT_DIR / "metar_logger.log"
 
 # METAR stations in Colorado Springs area and region
@@ -48,35 +49,9 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-def get_safe_connection() -> sqlite3.Connection:
-    """
-    Create a database connection with crash-resilient settings.
-
-    Uses WAL (Write-Ahead Logging) mode which:
-    - Prevents corruption during unexpected shutdowns
-    - Allows concurrent reads during writes
-    - Provides better performance for most workloads
-    """
-    conn = sqlite3.connect(DB_PATH)
-
-    # Enable WAL mode for crash resilience
-    conn.execute("PRAGMA journal_mode=WAL")
-
-    # NORMAL sync is safe with WAL mode (commits survive OS crashes)
-    conn.execute("PRAGMA synchronous=NORMAL")
-
-    # Checkpoint WAL file every 1000 pages (~4MB) to prevent unbounded growth
-    conn.execute("PRAGMA wal_autocheckpoint=1000")
-
-    # Busy timeout: wait up to 5 seconds if database is locked
-    conn.execute("PRAGMA busy_timeout=5000")
-
-    return conn
-
-
 def init_tables():
     """Create required tables if they don't exist."""
-    conn = get_safe_connection()
+    conn = db_utils.get_connection()
     cursor = conn.cursor()
 
     # METAR table
@@ -283,10 +258,10 @@ def fetch_metar(station_id: str) -> dict | None:
 
 
 def store_metar(conn: sqlite3.Connection, fetch_time: str, metar: dict):
-    """Store METAR data."""
-    cursor = conn.cursor()
+    """Store METAR data with retry logic for database locks."""
 
-    try:
+    def do_insert(c):
+        cursor = c.cursor()
         cursor.execute("""
             INSERT OR IGNORE INTO metar (
                 fetch_time, station_id, observation_time, raw_metar,
@@ -311,8 +286,14 @@ def store_metar(conn: sqlite3.Connection, fetch_time: str, metar: dict):
             metar['altimeter_inhg'],
             metar['flight_category']
         ))
+        return cursor.rowcount
 
-        if cursor.rowcount > 0:
+    try:
+        rowcount = db_utils.execute_with_retry(
+            do_insert, conn, f"storing METAR for {metar['station_id']}"
+        )
+
+        if rowcount > 0:
             logger.info("Stored METAR for %s at %s",
                         metar['station_id'], metar['observation_time'])
             return True
@@ -335,22 +316,24 @@ def main():
 
     with ScriptMetrics('metar_logger', expected_items=len(METAR_STATIONS)) as metrics:
         fetch_time = datetime.now().isoformat()
-        conn = get_safe_connection()
+        conn = db_utils.get_connection()
 
-        # Fetch and store METAR for all stations
-        for station in METAR_STATIONS:
-            metar = fetch_metar(station)
-            if metar and metar['observation_time']:
-                if store_metar(conn, fetch_time, metar):
-                    metrics.item_succeeded(station, records_inserted=1, item_type='metar')
+        try:
+            # Fetch and store METAR for all stations
+            for station in METAR_STATIONS:
+                metar = fetch_metar(station)
+                if metar and metar['observation_time']:
+                    if store_metar(conn, fetch_time, metar):
+                        metrics.item_succeeded(station, records_inserted=1, item_type='metar')
+                    else:
+                        # Duplicate or already exists - still counts as "success"
+                        metrics.item_succeeded(station, records_inserted=0, item_type='metar')
                 else:
-                    # Duplicate or already exists - still counts as "success" (data available)
-                    metrics.item_succeeded(station, records_inserted=0, item_type='metar')
-            else:
-                metrics.item_failed(station, "Failed to fetch or parse METAR", item_type='metar')
+                    metrics.item_failed(station, "Failed to fetch or parse METAR", item_type='metar')
 
-        conn.commit()
-        conn.close()
+            db_utils.commit_with_retry(conn, "final commit")
+        finally:
+            conn.close()
 
         metar_stored = sum(1 for i in metrics.items.values()
                           if i.status == "success" and i.records_inserted > 0)

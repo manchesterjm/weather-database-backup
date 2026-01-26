@@ -14,18 +14,21 @@ Usage:
 import sqlite3
 import argparse
 from datetime import datetime, timedelta
-from pathlib import Path
 
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 import numpy as np
 
-DB_PATH = Path(r"D:\Scripts\weather_data\weather.db")
-OUTPUT_DIR = Path(r"D:\Scripts\weather_data")
+import db_utils
+
+# Use paths from db_utils for consistency
+DB_PATH = db_utils.DB_PATH
+OUTPUT_DIR = db_utils.DATA_DIR
 
 
 def get_connection():
-    conn = sqlite3.connect(DB_PATH)
+    """Create a database connection with row factory."""
+    conn = db_utils.get_connection()
     conn.row_factory = sqlite3.Row
     return conn
 

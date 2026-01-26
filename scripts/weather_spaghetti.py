@@ -17,14 +17,15 @@ import sqlite3
 import argparse
 import re
 from datetime import datetime, timedelta
-from pathlib import Path
 
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 import numpy as np
 
-# Database location
-DB_PATH = Path(r"D:\Scripts\weather_data\weather.db")
+import db_utils
+
+# Use paths from db_utils for consistency
+DB_PATH = db_utils.DB_PATH
 
 # Color palette for different forecast vintages
 COLORS = [
@@ -36,9 +37,7 @@ COLORS = [
 
 def get_db_connection():
     """Connect to the weather database."""
-    if not DB_PATH.exists():
-        raise FileNotFoundError(f"Database not found: {DB_PATH}")
-    return sqlite3.connect(str(DB_PATH))
+    return db_utils.get_connection()
 
 
 def parse_fetch_time(fetch_time_str):

@@ -29,6 +29,8 @@ from pathlib import Path
 
 import requests
 
+import db_utils
+# Note: 'time' module not needed here - retry logic is in db_utils
 from script_metrics import ScriptMetrics
 
 # Optional imports (checked at runtime)
@@ -39,10 +41,10 @@ try:
 except ImportError:
     HAS_PYGRIB = False
 
-# Configuration - use same paths as weather_logger.py
-SCRIPT_DIR = Path(__file__).parent
-DATA_DIR = SCRIPT_DIR / "weather_data"
-DB_PATH = DATA_DIR / "weather.db"
+# Configuration - use paths from db_utils for consistency
+SCRIPT_DIR = db_utils.SCRIPTS_DIR
+DATA_DIR = db_utils.DATA_DIR
+DB_PATH = db_utils.DB_PATH
 LOG_PATH = SCRIPT_DIR / "gfs_logger.log"
 
 # S3 bucket (accessible via HTTP)
@@ -93,35 +95,9 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-def get_safe_connection() -> sqlite3.Connection:
-    """
-    Create a database connection with crash-resilient settings.
-
-    Uses WAL (Write-Ahead Logging) mode which:
-    - Prevents corruption during unexpected shutdowns
-    - Allows concurrent reads during writes
-    - Provides better performance for most workloads
-    """
-    conn = sqlite3.connect(DB_PATH)
-
-    # Enable WAL mode for crash resilience
-    conn.execute("PRAGMA journal_mode=WAL")
-
-    # NORMAL sync is safe with WAL mode (commits survive OS crashes)
-    conn.execute("PRAGMA synchronous=NORMAL")
-
-    # Checkpoint WAL file every 1000 pages (~4MB) to prevent unbounded growth
-    conn.execute("PRAGMA wal_autocheckpoint=1000")
-
-    # Busy timeout: wait up to 5 seconds if database is locked
-    conn.execute("PRAGMA busy_timeout=5000")
-
-    return conn
-
-
 def init_gfs_table():
     """Create GFS forecast table if it doesn't exist."""
-    conn = get_safe_connection()
+    conn = db_utils.get_connection()
     cursor = conn.cursor()
 
     cursor.execute("""
@@ -359,7 +335,7 @@ def main():
     with ScriptMetrics('gfs_logger', expected_items=len(FORECAST_HOURS),
                        model_run=model_run) as metrics:
         # Connect to database
-        conn = get_safe_connection()
+        conn = db_utils.get_connection()
 
         try:
             for forecast_hour in FORECAST_HOURS:
@@ -383,9 +359,11 @@ def main():
                     # Calculate valid time
                     valid_time = model_time + timedelta(hours=forecast_hour)
 
-                    # Store in database
-                    store_gfs_data(conn, fetch_time, date, cycle, forecast_hour,
-                                  valid_time.isoformat(), data)
+                    # Store in database with retry logic
+                    def do_store(c):
+                        store_gfs_data(c, fetch_time, date, cycle, forecast_hour,
+                                       valid_time.isoformat(), data)
+                    db_utils.execute_with_retry(conn, do_store, f"storing f{forecast_hour:03d}")
                     metrics.item_succeeded(item_name, records_inserted=1,
                                            item_type='forecast_hour')
 
@@ -398,7 +376,7 @@ def main():
                         grib_path.unlink()
                         logger.info("  Cleaned up %s", grib_path.name)
 
-            conn.commit()
+            db_utils.execute_with_retry(conn, lambda c: c.commit(), "final commit")
             stored_count = sum(1 for i in metrics.items.values() if i.status == "success")
             logger.info("Stored %d GFS forecast hours", stored_count)
 

@@ -10,7 +10,7 @@ These outlooks are issued once daily around 3 PM EST.
 
 Data Sources:
 - 8-14 Day: https://www.cpc.ncep.noaa.gov/products/predictions/610day/fxus06.html
-- Monthly: https://www.cpc.ncep.noaa.gov/products/predictions/30day/fxus07.html
+- Monthly: https://www.cpc.ncep.noaa.gov/products/predictions/long_range/fxus07.html
 """
 
 import logging
@@ -23,18 +23,19 @@ from pathlib import Path
 
 import requests
 
+import db_utils
 from script_metrics import ScriptMetrics
 
-# Configuration
-SCRIPT_DIR = Path(__file__).parent
-DATA_DIR = SCRIPT_DIR / "weather_data"
-DB_PATH = DATA_DIR / "weather.db"
+# Configuration - use paths from db_utils for consistency
+SCRIPT_DIR = db_utils.SCRIPTS_DIR
+DATA_DIR = db_utils.DATA_DIR
+DB_PATH = db_utils.DB_PATH
 LOG_PATH = SCRIPT_DIR / "cpc_logger.log"
 
 # CPC URLs
 URLS = {
     "8_14_day": "https://www.cpc.ncep.noaa.gov/products/predictions/610day/fxus06.html",
-    "monthly": "https://www.cpc.ncep.noaa.gov/products/predictions/30day/fxus07.html"
+    "monthly": "https://www.cpc.ncep.noaa.gov/products/predictions/long_range/fxus07.html"
 }
 
 # Setup logging
@@ -49,19 +50,9 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-def get_safe_connection() -> sqlite3.Connection:
-    """Create a database connection with crash-resilient settings."""
-    conn = sqlite3.connect(DB_PATH)
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA synchronous=NORMAL")
-    conn.execute("PRAGMA wal_autocheckpoint=1000")
-    conn.execute("PRAGMA busy_timeout=5000")
-    return conn
-
-
 def init_cpc_table():
     """Create CPC outlooks table if it doesn't exist."""
-    conn = get_safe_connection()
+    conn = db_utils.get_connection()
     cursor = conn.cursor()
 
     cursor.execute("""
@@ -273,27 +264,30 @@ def fetch_and_store_outlook(outlook_type: str, url: str) -> bool:
             logger.warning("Could not parse discussion for %s", outlook_type)
             return False
 
-        # Store in database
-        conn = get_safe_connection()
-        cursor = conn.cursor()
-
+        # Store in database with retry logic
+        conn = db_utils.get_connection()
         fetch_time = datetime.now(timezone.utc).isoformat()
 
-        cursor.execute("""
-            INSERT OR REPLACE INTO cpc_outlooks
-            (fetch_time, outlook_type, issued_date, valid_start, valid_end, discussion)
-            VALUES (?, ?, ?, ?, ?, ?)
-        """, (
-            fetch_time,
-            outlook_type,
-            data["issued_date"],
-            data["valid_start"],
-            data["valid_end"],
-            data["discussion"]
-        ))
+        def do_insert(c):
+            cursor = c.cursor()
+            cursor.execute("""
+                INSERT OR REPLACE INTO cpc_outlooks
+                (fetch_time, outlook_type, issued_date, valid_start, valid_end, discussion)
+                VALUES (?, ?, ?, ?, ?, ?)
+            """, (
+                fetch_time,
+                outlook_type,
+                data["issued_date"],
+                data["valid_start"],
+                data["valid_end"],
+                data["discussion"]
+            ))
 
-        conn.commit()
-        conn.close()
+        try:
+            db_utils.execute_with_retry(do_insert, conn, f"storing {outlook_type} outlook")
+            db_utils.commit_with_retry(conn, f"commit {outlook_type}")
+        finally:
+            conn.close()
 
         logger.info("Stored %s outlook issued %s", outlook_type, data['issued_date'])
         logger.info("  Valid: %s to %s", data['valid_start'], data['valid_end'])

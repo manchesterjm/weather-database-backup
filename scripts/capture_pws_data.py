@@ -20,10 +20,11 @@ from datetime import datetime
 from pathlib import Path
 import sys
 
+import db_utils
 from script_metrics import ScriptMetrics
 
 # Configuration
-DB_PATH = "/mnt/d/Scripts/weather_data/weather.db"
+DB_PATH = db_utils.DB_PATH
 WUNDERMAP_URL = "https://www.wunderground.com/wundermap?lat=38.9194&lon=-104.7509&zoom=12"
 SHOT_SCRAPER = "/home/josh/.local/bin/shot-scraper"  # Full path for scheduled tasks
 LOG_FILE = "/mnt/d/Scripts/pws_capture.log"
@@ -154,29 +155,29 @@ def save_to_database(data):
         logger.warning("No temperature data to save")
         return False
 
+    # Round timestamp to the nearest hour for deduplication
+    ts = datetime.fromisoformat(data['timestamp'].replace('Z', '+00:00'))
+    hour_ts = ts.replace(minute=0, second=0, microsecond=0).isoformat()
+
+    conn = db_utils.get_connection()
     try:
-        conn = sqlite3.connect(DB_PATH)
-        cursor = conn.cursor()
+        def do_insert(c):
+            cursor = c.cursor()
+            cursor.execute("""
+                INSERT OR REPLACE INTO pws_observations
+                (timestamp, station_count, min_temp, max_temp, avg_temp, temps_json)
+                VALUES (?, ?, ?, ?, ?, ?)
+            """, (
+                hour_ts,
+                data['tempCount'],
+                data['minTemp'],
+                data['maxTemp'],
+                round(data['avgTemp'], 1) if data['avgTemp'] else None,
+                json.dumps(data['temps'])
+            ))
 
-        # Round timestamp to the nearest hour for deduplication
-        ts = datetime.fromisoformat(data['timestamp'].replace('Z', '+00:00'))
-        hour_ts = ts.replace(minute=0, second=0, microsecond=0).isoformat()
-
-        cursor.execute("""
-            INSERT OR REPLACE INTO pws_observations
-            (timestamp, station_count, min_temp, max_temp, avg_temp, temps_json)
-            VALUES (?, ?, ?, ?, ?, ?)
-        """, (
-            hour_ts,
-            data['tempCount'],
-            data['minTemp'],
-            data['maxTemp'],
-            round(data['avgTemp'], 1) if data['avgTemp'] else None,
-            json.dumps(data['temps'])
-        ))
-
-        conn.commit()
-        conn.close()
+        db_utils.execute_with_retry(do_insert, conn, "inserting PWS data")
+        db_utils.commit_with_retry(conn, "committing PWS data")
 
         logger.info(f"Saved: {data['tempCount']} stations, "
                    f"range {data['minTemp']}-{data['maxTemp']}°F, avg {data['avgTemp']:.1f}°F")
@@ -185,9 +186,14 @@ def save_to_database(data):
     except sqlite3.IntegrityError:
         logger.warning(f"Data for {hour_ts} already exists")
         return False
-    except Exception as e:
+    except sqlite3.OperationalError as e:
         logger.error(f"Database error: {e}")
         return False
+    except Exception as e:
+        logger.error(f"Unexpected error: {e}")
+        return False
+    finally:
+        conn.close()
 
 
 def main():
