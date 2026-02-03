@@ -57,10 +57,17 @@ METAR_STATIONS = ["KCOS", "KFLY", "KAFF", "KFCS", "KAPA", "KPUB"]
 # NWS Digital Forecast (HTML) - often more up-to-date than JSON API
 # Base URL template - AheadHour parameter controls which 48-hour window to fetch
 # AheadHour=0: hours 0-47, AheadHour=48: hours 48-95, AheadHour=96: hours 96-143
+# Full parameter list for all weather data:
+#   w0=t (temp), w1=td (dewpoint), w2=wc (wind chill), w3=sfcwind, w4=sky, w5=pop,
+#   w6=rh, w7=rain, w8=thunder, w9=snow, w10=fzg (freezing rain), w11=sleet, w12=fog
+#   pqpfhr=3/psnwhr=3 for 3-hour probability windows
+#   w18-21=pqpf0-3 (QPF 0.10/0.25/0.50/1.00"), w23-27=psnw0-4 (snow 0.1/1/3/6/12")
 DIGITAL_FORECAST_BASE_URL = (
     "https://forecast.weather.gov/MapClick.php?"
-    "w0=t&w1=td&w2=hi&w3=sfcwind&w4=sky&w5=pop&w6=rh&w7=rain&"
-    "pqpfhr=3&w15=pqpf0&w16=pqpf1&w17=pqpf2&w18=pqpf3&psnwhr=3&"
+    "w0=t&w1=td&w2=wc&w3=sfcwind&w3u=1&w4=sky&w5=pop&w6=rh&"
+    "w7=rain&w8=thunder&w9=snow&w10=fzg&w11=sleet&w12=fog&"
+    "pqpfhr=3&w18=pqpf0&w19=pqpf1&w20=pqpf2&w21=pqpf3&"
+    "psnwhr=3&w23=psnw0&w24=psnw1&w25=psnw2&w26=psnw3&w27=psnw4&"
     "AheadHour={ahead_hour}&Submit=Submit&FcstType=digital&"
     "textField1=38.9194&textField2=-104.7509&site=all"
 )
@@ -172,12 +179,28 @@ def init_database():
             forecast_hour INTEGER NOT NULL,
             temperature INTEGER,
             dewpoint INTEGER,
-            heat_index INTEGER,
+            wind_chill INTEGER,
             wind_speed INTEGER,
             wind_direction TEXT,
+            wind_gust INTEGER,
             sky_cover INTEGER,
             precip_probability INTEGER,
-            relative_humidity INTEGER
+            relative_humidity INTEGER,
+            rain_chance INTEGER,
+            thunder_chance INTEGER,
+            snow_chance INTEGER,
+            freezing_rain_chance INTEGER,
+            sleet_chance INTEGER,
+            fog_chance INTEGER,
+            qpf_010_prob INTEGER,
+            qpf_025_prob INTEGER,
+            qpf_050_prob INTEGER,
+            qpf_100_prob INTEGER,
+            snow_01_prob INTEGER,
+            snow_1_prob INTEGER,
+            snow_3_prob INTEGER,
+            snow_6_prob INTEGER,
+            snow_12_prob INTEGER
         )
     """)
 
@@ -275,6 +298,33 @@ def init_database():
         )
     """)
 
+    # Migrate digital_forecast table - add new columns if they don't exist
+    # SQLite doesn't have ADD COLUMN IF NOT EXISTS, so we check first
+    existing_cols = {row[1] for row in cursor.execute("PRAGMA table_info(digital_forecast)")}
+    new_columns = [
+        ("wind_chill", "INTEGER"),
+        ("wind_gust", "INTEGER"),
+        ("rain_chance", "INTEGER"),
+        ("thunder_chance", "INTEGER"),
+        ("snow_chance", "INTEGER"),
+        ("freezing_rain_chance", "INTEGER"),
+        ("sleet_chance", "INTEGER"),
+        ("fog_chance", "INTEGER"),
+        ("qpf_010_prob", "INTEGER"),
+        ("qpf_025_prob", "INTEGER"),
+        ("qpf_050_prob", "INTEGER"),
+        ("qpf_100_prob", "INTEGER"),
+        ("snow_01_prob", "INTEGER"),
+        ("snow_1_prob", "INTEGER"),
+        ("snow_3_prob", "INTEGER"),
+        ("snow_6_prob", "INTEGER"),
+        ("snow_12_prob", "INTEGER"),
+    ]
+    for col_name, col_type in new_columns:
+        if col_name not in existing_cols:
+            cursor.execute(f"ALTER TABLE digital_forecast ADD COLUMN {col_name} {col_type}")
+            logger.info(f"Added column {col_name} to digital_forecast")
+
     # Indexes for efficient spaghetti chart queries
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_forecast_time ON forecast_snapshots(forecast_time)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_fetch_time ON forecast_snapshots(fetch_time)")
@@ -370,15 +420,39 @@ def fetch_digital_forecast_page(ahead_hour: int) -> list[dict] | None:
 
         # Data rows mapping (row index -> field name)
         row_mapping = {
-            3: 'temperature',      # Temperature (°F)
-            4: 'dewpoint',         # Dewpoint (°F)
-            # 5: wind_chill - we store as heat_index field
-            6: 'wind_speed',       # Surface Wind (mph)
-            7: 'wind_direction',   # Wind Dir
-            # 8: gust - skip
-            9: 'sky_cover',        # Sky Cover (%)
-            10: 'precip_probability',  # Precipitation Potential
-            11: 'relative_humidity'    # Relative Humidity (%)
+            3: 'temperature',           # Temperature (°F)
+            4: 'dewpoint',              # Dewpoint (°F)
+            5: 'wind_chill',            # Wind Chill (°F)
+            6: 'wind_speed',            # Surface Wind (mph)
+            7: 'wind_direction',        # Wind Dir
+            8: 'wind_gust',             # Gust
+            9: 'sky_cover',             # Sky Cover (%)
+            10: 'precip_probability',   # Precipitation Potential (%)
+            11: 'relative_humidity',    # Relative Humidity (%)
+            12: 'rain_chance',          # Rain
+            13: 'thunder_chance',       # Thunder
+            14: 'snow_chance',          # Snow
+            15: 'freezing_rain_chance', # Freezing Rain
+            16: 'sleet_chance',         # Sleet
+            17: 'fog_chance',           # Fog
+            18: 'qpf_010_prob',         # 3hr Prob QPF 0.10
+            19: 'qpf_025_prob',         # 3hr Prob QPF 0.25
+            20: 'qpf_050_prob',         # 3hr Prob QPF 0.50
+            21: 'qpf_100_prob',         # 3hr Prob QPF 1.00
+            22: 'snow_01_prob',         # 3hr Prob Snow 0.1in
+            23: 'snow_1_prob',          # 3hr Prob Snow 1in
+            24: 'snow_3_prob',          # 3hr Prob Snow 3in
+            25: 'snow_6_prob',          # 3hr Prob Snow 6in
+            26: 'snow_12_prob',         # 3hr Prob Snow 12in
+        }
+
+        # NWS uses text codes for precip type chances - convert to percentages
+        precip_text_to_pct = {
+            '--': 0, '': 0,
+            'SChc': 15,    # Slight Chance (10-20%)
+            'Chc': 40,     # Chance (30-50%)
+            'Lkly': 65,    # Likely (60-70%)
+            'Def': 90,     # Definite (80-100%)
         }
 
         # Parse data rows into column-indexed dict
@@ -392,14 +466,6 @@ def fetch_digital_forecast_page(ahead_hour: int) -> list[dict] | None:
                 text = cell.get_text(strip=True)
                 row_data[field][col_idx] = text
 
-        # Also get wind chill/heat index from row 5
-        heat_index_data = {}
-        if len(rows) > 5:
-            cells = rows[5].find_all(['td', 'th'])
-            for col_idx, cell in enumerate(cells[1:], start=1):
-                text = cell.get_text(strip=True)
-                heat_index_data[col_idx] = text
-
         # Combine into forecast entries
         for col_idx in sorted(col_hours.keys()):
             if col_idx not in col_dates:
@@ -410,12 +476,34 @@ def fetch_digital_forecast_page(ahead_hour: int) -> list[dict] | None:
                 'hour': col_hours[col_idx],
                 'temperature': None,
                 'dewpoint': None,
-                'heat_index': None,
+                'wind_chill': None,
                 'wind_speed': None,
                 'wind_direction': None,
+                'wind_gust': None,
                 'sky_cover': None,
                 'precip_probability': None,
-                'relative_humidity': None
+                'relative_humidity': None,
+                'rain_chance': None,
+                'thunder_chance': None,
+                'snow_chance': None,
+                'freezing_rain_chance': None,
+                'sleet_chance': None,
+                'fog_chance': None,
+                'qpf_010_prob': None,
+                'qpf_025_prob': None,
+                'qpf_050_prob': None,
+                'qpf_100_prob': None,
+                'snow_01_prob': None,
+                'snow_1_prob': None,
+                'snow_3_prob': None,
+                'snow_6_prob': None,
+                'snow_12_prob': None,
+            }
+
+            # Fields that use text codes for precip type (row 12-17)
+            precip_type_fields = {
+                'rain_chance', 'thunder_chance', 'snow_chance',
+                'freezing_rain_chance', 'sleet_chance', 'fog_chance'
             }
 
             # Extract values for each field
@@ -424,16 +512,19 @@ def fetch_digital_forecast_page(ahead_hour: int) -> list[dict] | None:
                     val = row_data[field][col_idx]
                     if field == 'wind_direction':
                         forecast[field] = val if val else None
+                    elif field in precip_type_fields:
+                        # Convert text codes (Chc, Lkly, etc.) to percentages
+                        forecast[field] = precip_text_to_pct.get(val, None)
+                        if forecast[field] is None and val:
+                            # Try numeric extraction as fallback
+                            num_match = re.search(r'(\d+)', val)
+                            if num_match:
+                                forecast[field] = int(num_match.group(1))
                     else:
+                        # Numeric fields - extract number from value
                         num_match = re.search(r'(-?\d+)', val)
                         if num_match:
                             forecast[field] = int(num_match.group(1))
-
-            # Heat index / wind chill
-            if col_idx in heat_index_data:
-                num_match = re.search(r'(-?\d+)', heat_index_data[col_idx])
-                if num_match:
-                    forecast['heat_index'] = int(num_match.group(1))
 
             forecasts.append(forecast)
 
@@ -590,22 +681,42 @@ def store_digital_forecast(conn: sqlite3.Connection, fetch_time: str, forecasts:
         cursor.execute("""
             INSERT INTO digital_forecast (
                 fetch_time, forecast_date, forecast_hour,
-                temperature, dewpoint, heat_index,
-                wind_speed, wind_direction, sky_cover,
-                precip_probability, relative_humidity
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                temperature, dewpoint, wind_chill,
+                wind_speed, wind_direction, wind_gust, sky_cover,
+                precip_probability, relative_humidity,
+                rain_chance, thunder_chance, snow_chance,
+                freezing_rain_chance, sleet_chance, fog_chance,
+                qpf_010_prob, qpf_025_prob, qpf_050_prob, qpf_100_prob,
+                snow_01_prob, snow_1_prob, snow_3_prob, snow_6_prob, snow_12_prob
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             fetch_time,
             f['date'],
             f['hour'],
             f['temperature'],
             f['dewpoint'],
-            f['heat_index'],
+            f['wind_chill'],
             f['wind_speed'],
             f['wind_direction'],
+            f['wind_gust'],
             f['sky_cover'],
             f['precip_probability'],
-            f['relative_humidity']
+            f['relative_humidity'],
+            f['rain_chance'],
+            f['thunder_chance'],
+            f['snow_chance'],
+            f['freezing_rain_chance'],
+            f['sleet_chance'],
+            f['fog_chance'],
+            f['qpf_010_prob'],
+            f['qpf_025_prob'],
+            f['qpf_050_prob'],
+            f['qpf_100_prob'],
+            f['snow_01_prob'],
+            f['snow_1_prob'],
+            f['snow_3_prob'],
+            f['snow_6_prob'],
+            f['snow_12_prob'],
         ))
 
     logger.info(f"Stored {len(forecasts)} digital forecast periods")
