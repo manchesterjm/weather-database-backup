@@ -37,6 +37,7 @@ from pathlib import Path
 import requests
 
 import db_utils
+import tz_utils
 from script_metrics import ScriptMetrics
 
 # Optional imports (checked at runtime)
@@ -119,7 +120,7 @@ def init_nbm_table():
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_nbm_fetch ON nbm_forecasts(fetch_time)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_nbm_model ON nbm_forecasts(model_run_date, model_run_cycle)")
 
-    conn.commit()
+    db_utils.commit_with_retry(conn, "init nbm table")
     conn.close()
     logger.info("NBM table initialized")
 
@@ -311,7 +312,7 @@ def main():
     model_time = datetime.strptime(f"{date}{cycle}", "%Y%m%d%H")
 
     # Current fetch time
-    fetch_time = datetime.now(timezone.utc).isoformat()
+    fetch_time = tz_utils.now_utc()
 
     with ScriptMetrics('nbm_logger', expected_items=len(FORECAST_HOURS),
                        model_run=model_run) as metrics:

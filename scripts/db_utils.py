@@ -26,9 +26,9 @@ from typing import Callable, Optional, TypeVar
 # ============================================================================
 
 # Database timeout settings
-DB_BUSY_TIMEOUT_MS = 30000  # 30 seconds SQLite busy timeout
+DB_BUSY_TIMEOUT_MS = 60000  # 60 seconds SQLite busy timeout
 DB_MAX_RETRIES = 3          # Number of retry attempts
-DB_RETRY_DELAY_SEC = 10     # Seconds between retries
+DB_RETRY_DELAY_SEC = 60     # Seconds between retries
 
 # Path configuration - use Windows paths for consistency
 if sys.platform == 'win32':

@@ -17,13 +17,14 @@ import logging
 import re
 import sqlite3
 import sys
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from html import unescape
 from pathlib import Path
 
 import requests
 
 import db_utils
+import tz_utils
 from script_metrics import ScriptMetrics
 
 # Configuration - use paths from db_utils for consistency
@@ -72,7 +73,7 @@ def init_cpc_table():
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_cpc_issued ON cpc_outlooks(issued_date)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_cpc_fetch ON cpc_outlooks(fetch_time)")
 
-    conn.commit()
+    db_utils.commit_with_retry(conn, "init cpc table")
     conn.close()
     logger.info("CPC table initialized")
 
@@ -266,7 +267,7 @@ def fetch_and_store_outlook(outlook_type: str, url: str) -> bool:
 
         # Store in database with retry logic
         conn = db_utils.get_connection()
-        fetch_time = datetime.now(timezone.utc).isoformat()
+        fetch_time = tz_utils.now_utc()
 
         def do_insert(c):
             cursor = c.cursor()

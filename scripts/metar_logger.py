@@ -26,6 +26,7 @@ import requests
 from bs4 import BeautifulSoup
 
 import db_utils
+import tz_utils
 from script_metrics import ScriptMetrics
 
 # Configuration - use paths from db_utils for consistency
@@ -80,7 +81,7 @@ def init_tables():
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_metar_time ON metar(observation_time)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_metar_station ON metar(station_id)")
 
-    conn.commit()
+    db_utils.commit_with_retry(conn, "init metar table")
     conn.close()
 
 
@@ -315,7 +316,7 @@ def main():
     init_tables()
 
     with ScriptMetrics('metar_logger', expected_items=len(METAR_STATIONS)) as metrics:
-        fetch_time = datetime.now().isoformat()
+        fetch_time = tz_utils.now_utc()
         conn = db_utils.get_connection()
 
         try:

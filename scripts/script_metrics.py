@@ -31,10 +31,10 @@ import traceback
 import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
 from typing import Optional
 
 import db_utils
+import tz_utils
 
 # Use paths from db_utils for consistency
 SCRIPT_DIR = db_utils.SCRIPTS_DIR
@@ -152,14 +152,14 @@ class ScriptMetrics:  # pylint: disable=too-many-instance-attributes
 
     def __enter__(self):
         """Initialize metrics tracking on context entry."""
-        self.start_time = datetime.now(timezone.utc).isoformat()
+        self.start_time = tz_utils.now_utc()
         self._safe_init_db()
         self._safe_insert_run()
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         """Finalize metrics on context exit."""
-        self.end_time = datetime.now(timezone.utc).isoformat()
+        self.end_time = tz_utils.now_utc()
 
         if exc_type is not None:
             self.status = "failed"
@@ -184,72 +184,79 @@ class ScriptMetrics:  # pylint: disable=too-many-instance-attributes
             self._initialized = False
 
     def _safe_insert_run(self):
-        """Insert initial run record, failing silently on error."""
+        """Insert initial run record with retry logic, failing silently on final error."""
         if not self._initialized:
             return
         try:
             conn = db_utils.get_connection()
-            cursor = conn.cursor()
-            cursor.execute("""
-                INSERT INTO script_runs (
-                    run_id, script_name, start_time, status,
-                    total_items_expected, model_run, notes
-                ) VALUES (?, ?, ?, ?, ?, ?, ?)
-            """, (
-                self.run_id,
-                self.script_name,
-                self.start_time,
-                self.status,
-                self.expected_items,
-                self.model_run,
-                self.notes
-            ))
-            conn.commit()
+
+            def do_insert(c):
+                cursor = c.cursor()
+                cursor.execute("""
+                    INSERT INTO script_runs (
+                        run_id, script_name, start_time, status,
+                        total_items_expected, model_run, notes
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    self.run_id,
+                    self.script_name,
+                    self.start_time,
+                    self.status,
+                    self.expected_items,
+                    self.model_run,
+                    self.notes
+                ))
+
+            db_utils.execute_with_retry(do_insert, conn, "insert run record")
+            db_utils.commit_with_retry(conn, "commit run record")
             conn.close()
         except (sqlite3.Error, OSError) as e:
-            logger.warning("Failed to insert run record: %s", e)
+            logger.warning("Failed to insert run record after retries: %s", e)
 
     def _safe_update_run(self):
-        """Update run record with final state, failing silently on error."""
+        """Update run record with final state, with retry logic."""
         if not self._initialized:
             return
         try:
             conn = db_utils.get_connection()
-            cursor = conn.cursor()
 
             # Calculate totals from items
             succeeded = sum(1 for i in self.items.values() if i.status == "success")
             failed = sum(1 for i in self.items.values() if i.status == "failed")
             records = sum(i.records_inserted for i in self.items.values())
 
-            cursor.execute("""
-                UPDATE script_runs SET
-                    end_time = ?,
-                    status = ?,
-                    exit_code = ?,
-                    error_message = ?,
-                    error_traceback = ?,
-                    total_items_succeeded = ?,
-                    total_items_failed = ?,
-                    total_records_inserted = ?,
-                    total_retries = ?
-                WHERE run_id = ?
-            """, (
-                self.end_time,
-                self.status,
-                self.exit_code,
-                self.error_message,
-                self.error_traceback,
-                succeeded,
-                failed,
-                records,
-                self.total_retries,
-                self.run_id
-            ))
-            conn.commit()
+            def do_update(c):
+                cursor = c.cursor()
+                cursor.execute("""
+                    UPDATE script_runs SET
+                        end_time = ?,
+                        status = ?,
+                        exit_code = ?,
+                        error_message = ?,
+                        error_traceback = ?,
+                        total_items_succeeded = ?,
+                        total_items_failed = ?,
+                        total_records_inserted = ?,
+                        total_retries = ?
+                    WHERE run_id = ?
+                """, (
+                    self.end_time,
+                    self.status,
+                    self.exit_code,
+                    self.error_message,
+                    self.error_traceback,
+                    succeeded,
+                    failed,
+                    records,
+                    self.total_retries,
+                    self.run_id
+                ))
+
+            db_utils.execute_with_retry(do_update, conn, "update run record")
+            db_utils.commit_with_retry(conn, "commit run update")
             conn.close()
         except (sqlite3.Error, OSError) as e:
-            logger.warning("Failed to update run record: %s", e)
+            logger.warning("Failed to update run record after retries: %s", e)
 
     def _determine_status(self):
         """Determine final status based on item outcomes."""
@@ -289,7 +296,7 @@ class ScriptMetrics:  # pylint: disable=too-many-instance-attributes
         """
         item = ItemTracker(name=name, item_type=item_type)
         item.status = "running"
-        item.start_time = datetime.now(timezone.utc).isoformat()
+        item.start_time = tz_utils.now_utc()
         self.items[name] = item
 
         try:
@@ -302,37 +309,41 @@ class ScriptMetrics:  # pylint: disable=too-many-instance-attributes
             item.error_message = str(e)
             raise
         finally:
-            item.end_time = datetime.now(timezone.utc).isoformat()
+            item.end_time = tz_utils.now_utc()
             self._safe_insert_item(item)
 
     def _safe_insert_item(self, item: ItemTracker):
-        """Insert item record, failing silently on error."""
+        """Insert item record with retry logic, failing silently on final error."""
         if not self._initialized:
             return
         try:
             conn = db_utils.get_connection()
-            cursor = conn.cursor()
-            cursor.execute("""
-                INSERT INTO script_run_items (
-                    run_id, item_name, item_type, status,
-                    start_time, end_time, records_inserted,
-                    error_message, retry_count
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (
-                self.run_id,
-                item.name,
-                item.item_type,
-                item.status,
-                item.start_time,
-                item.end_time,
-                item.records_inserted,
-                item.error_message,
-                item.retry_count
-            ))
-            conn.commit()
+
+            def do_insert(c):
+                cursor = c.cursor()
+                cursor.execute("""
+                    INSERT INTO script_run_items (
+                        run_id, item_name, item_type, status,
+                        start_time, end_time, records_inserted,
+                        error_message, retry_count
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    self.run_id,
+                    item.name,
+                    item.item_type,
+                    item.status,
+                    item.start_time,
+                    item.end_time,
+                    item.records_inserted,
+                    item.error_message,
+                    item.retry_count
+                ))
+
+            db_utils.execute_with_retry(do_insert, conn, f"insert item {item.name}")
+            db_utils.commit_with_retry(conn, f"commit item {item.name}")
             conn.close()
         except (sqlite3.Error, OSError) as e:
-            logger.warning("Failed to insert item record: %s", e)
+            logger.warning("Failed to insert item record after retries: %s", e)
 
     def item_succeeded(self, name: str, records_inserted: int = 0,
                        item_type: Optional[str] = None):
@@ -341,8 +352,8 @@ class ScriptMetrics:  # pylint: disable=too-many-instance-attributes
             name=name,
             item_type=item_type,
             status="success",
-            start_time=datetime.now(timezone.utc).isoformat(),
-            end_time=datetime.now(timezone.utc).isoformat(),
+            start_time=tz_utils.now_utc(),
+            end_time=tz_utils.now_utc(),
             records_inserted=records_inserted
         )
         self.items[name] = item
@@ -354,8 +365,8 @@ class ScriptMetrics:  # pylint: disable=too-many-instance-attributes
             name=name,
             item_type=item_type,
             status="failed",
-            start_time=datetime.now(timezone.utc).isoformat(),
-            end_time=datetime.now(timezone.utc).isoformat(),
+            start_time=tz_utils.now_utc(),
+            end_time=tz_utils.now_utc(),
             error_message=error
         )
         self.items[name] = item
@@ -374,29 +385,34 @@ class ScriptMetrics:  # pylint: disable=too-many-instance-attributes
 
     def _safe_insert_retry(self, attempt: int, error: str,
                            error_type: Optional[str], item_name: Optional[str]):
-        """Insert retry record, failing silently on error."""
+        """Insert retry record with retry logic, failing silently on final error."""
         if not self._initialized:
             return
         try:
             conn = db_utils.get_connection()
-            cursor = conn.cursor()
-            cursor.execute("""
-                INSERT INTO script_retries (
-                    run_id, item_name, attempt_number,
-                    attempt_time, error_message, error_type
-                ) VALUES (?, ?, ?, ?, ?, ?)
-            """, (
-                self.run_id,
-                item_name,
-                attempt,
-                datetime.now(timezone.utc).isoformat(),
-                error,
-                error_type
-            ))
-            conn.commit()
+            attempt_time = tz_utils.now_utc()
+
+            def do_insert(c):
+                cursor = c.cursor()
+                cursor.execute("""
+                    INSERT INTO script_retries (
+                        run_id, item_name, attempt_number,
+                        attempt_time, error_message, error_type
+                    ) VALUES (?, ?, ?, ?, ?, ?)
+                """, (
+                    self.run_id,
+                    item_name,
+                    attempt,
+                    attempt_time,
+                    error,
+                    error_type
+                ))
+
+            db_utils.execute_with_retry(do_insert, conn, "insert retry record")
+            db_utils.commit_with_retry(conn, "commit retry record")
             conn.close()
         except (sqlite3.Error, OSError) as e:
-            logger.warning("Failed to insert retry record: %s", e)
+            logger.warning("Failed to insert retry record after retries: %s", e)
 
     def set_exit_code(self, code: int):
         """Explicitly set the exit code."""

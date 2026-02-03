@@ -25,6 +25,7 @@ import requests
 from bs4 import BeautifulSoup
 
 import db_utils
+import tz_utils
 from script_metrics import ScriptMetrics
 
 # Configuration - use paths from db_utils for consistency
@@ -342,7 +343,7 @@ def init_database():
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_daily_climate_date ON actual_daily_climate(observation_date)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_daily_climate_station ON actual_daily_climate(station_id)")
 
-    conn.commit()
+    db_utils.commit_with_retry(conn, "init database")
     conn.close()
     logger.info("Database initialized")
 
@@ -1482,8 +1483,8 @@ def main():
     # Initialize database
     init_database()
 
-    # Current fetch time (ISO 8601)
-    fetch_time = datetime.now().isoformat()
+    # Current fetch time (UTC ISO 8601 with Z suffix)
+    fetch_time = tz_utils.now_utc()
     logger.info(f"Fetch time: {fetch_time}")
 
     # 8 data types: forecast, hourly, alerts, digital, snowfall, daily_climate, observations, metar

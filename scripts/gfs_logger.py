@@ -30,6 +30,7 @@ from pathlib import Path
 import requests
 
 import db_utils
+import tz_utils
 # Note: 'time' module not needed here - retry logic is in db_utils
 from script_metrics import ScriptMetrics
 
@@ -135,7 +136,7 @@ def init_gfs_table():
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_gfs_fetch ON gfs_forecasts(fetch_time)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_gfs_model ON gfs_forecasts(model_run_date, model_run_cycle)")
 
-    conn.commit()
+    db_utils.commit_with_retry(conn, "init gfs table")
     conn.close()
     logger.info("GFS table initialized")
 
@@ -329,8 +330,8 @@ def main():
     # Calculate model run time
     model_time = datetime.strptime(f"{date}{cycle}", "%Y%m%d%H")
 
-    # Current fetch time
-    fetch_time = datetime.now().isoformat()
+    # Current fetch time (UTC)
+    fetch_time = tz_utils.now_utc()
 
     with ScriptMetrics('gfs_logger', expected_items=len(FORECAST_HOURS),
                        model_run=model_run) as metrics:
@@ -363,7 +364,7 @@ def main():
                     def do_store(c):
                         store_gfs_data(c, fetch_time, date, cycle, forecast_hour,
                                        valid_time.isoformat(), data)
-                    db_utils.execute_with_retry(conn, do_store, f"storing f{forecast_hour:03d}")
+                    db_utils.execute_with_retry(do_store, conn, f"storing f{forecast_hour:03d}")
                     metrics.item_succeeded(item_name, records_inserted=1,
                                            item_type='forecast_hour')
 
@@ -376,7 +377,7 @@ def main():
                         grib_path.unlink()
                         logger.info("  Cleaned up %s", grib_path.name)
 
-            db_utils.execute_with_retry(conn, lambda c: c.commit(), "final commit")
+            db_utils.commit_with_retry(conn, "final commit")
             stored_count = sum(1 for i in metrics.items.values() if i.status == "success")
             logger.info("Stored %d GFS forecast hours", stored_count)
 
