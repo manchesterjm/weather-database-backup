@@ -1512,6 +1512,7 @@ def main():
             # Forecast data (required)
             if forecast_data:
                 store_forecast(conn, fetch_time, forecast_data)
+                conn.commit()  # Commit before metrics to avoid lock
                 periods = len(forecast_data.get("properties", {}).get("periods", []))
                 metrics.item_succeeded('forecast', records_inserted=periods,
                                        item_type='nws_forecast')
@@ -1523,6 +1524,7 @@ def main():
             # Hourly data (required)
             if hourly_data:
                 store_hourly(conn, fetch_time, hourly_data)
+                conn.commit()  # Commit before metrics to avoid lock
                 periods = len(hourly_data.get("properties", {}).get("periods", []))
                 metrics.item_succeeded('hourly', records_inserted=periods,
                                        item_type='nws_hourly')
@@ -1534,6 +1536,7 @@ def main():
             # Alerts data (required - even if empty)
             if alerts_data:
                 store_alerts(conn, fetch_time, alerts_data)
+                conn.commit()  # Commit before metrics to avoid lock
                 alert_count = len(alerts_data.get("features", []))
                 metrics.item_succeeded('alerts', records_inserted=alert_count,
                                        item_type='nws_alerts')
@@ -1545,6 +1548,7 @@ def main():
             # Digital forecast (required)
             if digital_data:
                 store_digital_forecast(conn, fetch_time, digital_data)
+                conn.commit()  # Commit before metrics to avoid lock
                 metrics.item_succeeded('digital_forecast', records_inserted=len(digital_data),
                                        item_type='nws_digital')
             else:
@@ -1555,6 +1559,7 @@ def main():
             # Snowfall data (optional - may not be available)
             if snowfall_data:
                 store_snowfall(conn, fetch_time, snowfall_data)
+                conn.commit()  # Commit before metrics to avoid lock
                 metrics.item_succeeded('snowfall', records_inserted=len(snowfall_data),
                                        item_type='noaa_snowfall')
             else:
@@ -1566,6 +1571,7 @@ def main():
             # Daily climate data (optional)
             if daily_climate_data:
                 store_daily_climate(conn, fetch_time, daily_climate_data)
+                conn.commit()  # Commit before metrics to avoid lock
                 metrics.item_succeeded('daily_climate', records_inserted=len(daily_climate_data),
                                        item_type='iem_climate')
             else:
@@ -1577,6 +1583,7 @@ def main():
             # Observation data (required)
             if observation_data:
                 store_observations(conn, fetch_time, observation_data)
+                conn.commit()  # Commit before metrics to avoid lock
                 metrics.item_succeeded('observations', records_inserted=len(observation_data),
                                        item_type='nws_observations')
             else:
@@ -1588,6 +1595,7 @@ def main():
             if metar_data_list:
                 for metar in metar_data_list:
                     store_metar(conn, fetch_time, metar)
+                conn.commit()  # Commit before metrics to avoid lock
                 logger.info(f"Processed METAR for {len(metar_data_list)} stations")
                 metrics.item_succeeded('metar', records_inserted=len(metar_data_list),
                                        item_type='airnav_metar')
