@@ -365,6 +365,7 @@ def main():
                         store_gfs_data(c, fetch_time, date, cycle, forecast_hour,
                                        valid_time.isoformat(), data)
                     db_utils.execute_with_retry(do_store, conn, f"storing f{forecast_hour:03d}")
+                    conn.commit()  # Release lock before metrics operation
                     metrics.item_succeeded(item_name, records_inserted=1,
                                            item_type='forecast_hour')
 

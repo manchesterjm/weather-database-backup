@@ -325,6 +325,7 @@ def main():
                 metar = fetch_metar(station)
                 if metar and metar['observation_time']:
                     if store_metar(conn, fetch_time, metar):
+                        conn.commit()  # Release lock before metrics operation
                         metrics.item_succeeded(station, records_inserted=1, item_type='metar')
                     else:
                         # Duplicate or already exists - still counts as "success"

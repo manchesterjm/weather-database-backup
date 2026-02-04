@@ -615,6 +615,7 @@ def main():
             own_obs = fetch_station_current(OWN_STATION_ID)
             if own_obs:
                 stored = store_own_observation(conn, fetch_time, own_obs)
+                conn.commit()  # Release lock before metrics operation
                 metrics.item_succeeded(
                     OWN_STATION_ID,
                     records_inserted=1 if stored else 0,
@@ -634,6 +635,7 @@ def main():
                     stored = store_nearby_observation(
                         conn, fetch_time, obs
                     )
+                    conn.commit()  # Release lock before metrics operation
                     metrics.item_succeeded(
                         station_id,
                         records_inserted=1 if stored else 0,
