@@ -108,7 +108,7 @@ def init_metrics_tables():
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_items_run ON script_run_items(run_id)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_retries_run ON script_retries(run_id)")
 
-    conn.commit()
+    db_utils.commit_with_retry(conn, "init metrics tables")
     conn.close()
 
 
