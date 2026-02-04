@@ -24,12 +24,12 @@ import db_utils
 # Use paths from db_utils for consistency
 SCRIPT_DIR = db_utils.SCRIPTS_DIR
 DATA_DIR = db_utils.DATA_DIR
-DB_PATH = db_utils.DB_PATH
+METRICS_DB_PATH = db_utils.METRICS_DB_PATH
 
 
 def get_connection() -> sqlite3.Connection:
     """Create a database connection with row factory."""
-    conn = db_utils.get_connection()
+    conn = db_utils.get_metrics_connection()
     conn.row_factory = sqlite3.Row
     return conn
 
@@ -447,8 +447,8 @@ Examples:
 
     args = parser.parse_args()
 
-    if not DB_PATH.exists():
-        print(f"Database not found: {DB_PATH}")
+    if not METRICS_DB_PATH.exists():
+        print(f"Metrics database not found: {METRICS_DB_PATH}")
         return 1
 
     if args.details:

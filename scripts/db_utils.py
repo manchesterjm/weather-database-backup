@@ -39,6 +39,7 @@ else:
 
 DATA_DIR = SCRIPTS_DIR / "weather_data"
 DB_PATH = DATA_DIR / "weather.db"
+METRICS_DB_PATH = DATA_DIR / "metrics.db"
 
 # Type variable for generic return types
 T = TypeVar('T')
@@ -124,6 +125,18 @@ def get_connection(db_path: Optional[Path] = None) -> sqlite3.Connection:
     conn.execute(f"PRAGMA busy_timeout={DB_BUSY_TIMEOUT_MS}")
 
     return conn
+
+
+def get_metrics_connection() -> sqlite3.Connection:
+    """Get connection to metrics database (separate from weather data).
+
+    Uses the same crash-resilient settings as get_connection() but
+    points to metrics.db to avoid lock contention with weather data writes.
+
+    Returns:
+        sqlite3.Connection to metrics.db with optimized settings
+    """
+    return get_connection(METRICS_DB_PATH)
 
 
 @contextmanager
@@ -342,6 +355,7 @@ if __name__ == "__main__":
     print(f"Scripts dir: {SCRIPTS_DIR}")
     print(f"Data dir: {DATA_DIR}")
     print(f"DB path: {DB_PATH}")
+    print(f"Metrics DB path: {METRICS_DB_PATH}")
     print(f"Windows path: {get_windows_path(DB_PATH)}")
 
     print("\nTesting database access...")

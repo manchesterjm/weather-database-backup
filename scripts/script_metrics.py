@@ -39,14 +39,14 @@ import tz_utils
 # Use paths from db_utils for consistency
 SCRIPT_DIR = db_utils.SCRIPTS_DIR
 DATA_DIR = db_utils.DATA_DIR
-DB_PATH = db_utils.DB_PATH
+METRICS_DB_PATH = db_utils.METRICS_DB_PATH
 
 logger = logging.getLogger(__name__)
 
 
 def init_metrics_tables():
     """Create metrics tables if they don't exist."""
-    conn = db_utils.get_connection()
+    conn = db_utils.get_metrics_connection()
     cursor = conn.cursor()
 
     # One row per script execution
@@ -188,7 +188,7 @@ class ScriptMetrics:  # pylint: disable=too-many-instance-attributes
         if not self._initialized:
             return
         try:
-            conn = db_utils.get_connection()
+            conn = db_utils.get_metrics_connection()
 
             def do_insert(c):
                 cursor = c.cursor()
@@ -218,7 +218,7 @@ class ScriptMetrics:  # pylint: disable=too-many-instance-attributes
         if not self._initialized:
             return
         try:
-            conn = db_utils.get_connection()
+            conn = db_utils.get_metrics_connection()
 
             # Calculate totals from items
             succeeded = sum(1 for i in self.items.values() if i.status == "success")
@@ -317,7 +317,7 @@ class ScriptMetrics:  # pylint: disable=too-many-instance-attributes
         if not self._initialized:
             return
         try:
-            conn = db_utils.get_connection()
+            conn = db_utils.get_metrics_connection()
 
             def do_insert(c):
                 cursor = c.cursor()
@@ -389,7 +389,7 @@ class ScriptMetrics:  # pylint: disable=too-many-instance-attributes
         if not self._initialized:
             return
         try:
-            conn = db_utils.get_connection()
+            conn = db_utils.get_metrics_connection()
             attempt_time = tz_utils.now_utc()
 
             def do_insert(c):
