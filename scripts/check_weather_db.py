@@ -38,7 +38,6 @@ FRESHNESS_CHECKS = [
     ("forecast_snapshots", "fetch_time", "Forecast snapshots", 4),
     ("hourly_snapshots", "fetch_time", "Hourly snapshots", 4),
     ("ambient_observations", "timestamp", "Ambient Weather", 1),
-    ("nest_observations", "timestamp", "Nest thermostat", 1),
     ("gfs_forecasts", "fetch_time", "GFS forecasts", 8),
     ("nbm_forecasts", "fetch_time", "NBM forecasts", 8),
     ("cpc_outlooks", "fetch_time", "CPC outlooks", 26),
@@ -47,7 +46,7 @@ FRESHNESS_CHECKS = [
 # Table categories for summary display
 TABLE_CATEGORIES = {
     "Observations": [
-        "metar", "observations", "ambient_observations", "nest_observations",
+        "metar", "observations", "ambient_observations",
         "pws_observations", "pws_nearby_observations"
     ],
     "Forecasts": [
@@ -187,7 +186,6 @@ def get_today_counts(cursor) -> dict:
         ("hourly_snapshots", "fetch_time"),
         ("forecast_snapshots", "fetch_time"),
         ("ambient_observations", "timestamp"),
-        ("nest_observations", "timestamp"),
     ]
 
     counts = {}
@@ -219,7 +217,6 @@ def check_data_gaps(cursor) -> list[dict]:
     gap_checks = [
         ("metar", "observation_time", 2),           # Hourly, allow 2h gap
         ("ambient_observations", "timestamp", 0.5), # Every 5min, allow 30min gap
-        ("nest_observations", "timestamp", 0.5),    # Every 5min, allow 30min gap
         ("hourly_snapshots", "fetch_time", 4),      # Every 3h, allow 4h gap
     ]
 
@@ -276,7 +273,6 @@ def check_timestamp_format(cursor) -> dict:
         ("metar", "observation_time"),
         ("metar", "fetch_time"),
         ("ambient_observations", "timestamp"),
-        ("nest_observations", "timestamp"),
         ("forecast_snapshots", "fetch_time"),
         ("hourly_snapshots", "fetch_time"),
         ("gfs_forecasts", "fetch_time"),
