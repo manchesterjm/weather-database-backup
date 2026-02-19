@@ -55,6 +55,7 @@ METAR_STATIONS = ["KCOS", "KFLY", "KAFF", "KFCS", "KAPA", "KPUB"]
 # KAPA = Centennial Airport (Denver area, ~50 mi N)
 # KPUB = Pueblo Memorial Airport (~40 mi S)
 
+
 # NWS Digital Forecast (HTML) - often more up-to-date than JSON API
 # Base URL template - AheadHour parameter controls which 48-hour window to fetch
 # AheadHour=0: hours 0-47, AheadHour=48: hours 48-95, AheadHour=96: hours 96-143
