@@ -2,9 +2,9 @@
 
 Colorado Springs area weather data collected from NWS, METAR, NBM, GFS, and CPC sources.
 
-**Last backup:** 2026-04-13 06:46:48
+**Last backup:** 2026-04-17 16:06:14
 
-**Database size:** 54.95 MB
+**Database size:** 57.64 MB
 
 ## Data Sources
 
