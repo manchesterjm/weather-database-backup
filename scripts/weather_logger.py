@@ -15,11 +15,13 @@ Grid: 82,107
 
 import csv
 import io
+import json
 import logging
 import re
 import sqlite3
 from datetime import datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import requests
 from bs4 import BeautifulSoup
@@ -722,6 +724,50 @@ def store_digital_forecast(conn: sqlite3.Connection, fetch_time: str, forecasts:
         ))
 
     logger.info(f"Stored {len(forecasts)} digital forecast periods")
+
+
+SATELLITE_VIEWER_CLOUD_JSON = Path(r"D:\Projects\satellite_viewer\data\cloud_forecast.json")
+
+
+def export_cloud_forecast_for_viewer(conn: sqlite3.Connection) -> int:
+    """Write next ~6 days of hourly cloud cover to the satellite viewer's
+    data dir as JSON. Non-fatal; logs and returns 0 on failure.
+
+    forecast_hour in digital_forecast is local civil time (America/Denver);
+    convert to UTC ISO so the viewer can match against JS Date timestamps."""
+    cursor = conn.cursor()
+    cursor.execute("SELECT MAX(fetch_time) FROM digital_forecast")
+    row = cursor.fetchone()
+    if not row or not row[0]:
+        logger.warning("No digital_forecast snapshot to export for satellite viewer")
+        return 0
+    fetch_time = row[0]
+    cursor.execute(
+        "SELECT forecast_date, forecast_hour, sky_cover FROM digital_forecast "
+        "WHERE fetch_time = ? ORDER BY forecast_date, forecast_hour",
+        (fetch_time,),
+    )
+    local_tz = ZoneInfo("America/Denver")
+    utc_tz = ZoneInfo("UTC")
+    hourly = []
+    for d, h, sky in cursor.fetchall():
+        if sky is None:
+            continue
+        local_dt = datetime.strptime(d, "%Y-%m-%d").replace(hour=int(h), tzinfo=local_tz)
+        utc_iso = local_dt.astimezone(utc_tz).strftime("%Y-%m-%dT%H:%M:%SZ")
+        hourly.append({"time": utc_iso, "sky_cover": int(sky)})
+
+    payload = {
+        "generated": fetch_time,
+        "source": "NWS digital forecast (Colorado Springs)",
+        "hourly": hourly,
+    }
+    SATELLITE_VIEWER_CLOUD_JSON.parent.mkdir(parents=True, exist_ok=True)
+    tmp = SATELLITE_VIEWER_CLOUD_JSON.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(payload))
+    tmp.replace(SATELLITE_VIEWER_CLOUD_JSON)
+    logger.info(f"Exported {len(hourly)} hourly cloud points to {SATELLITE_VIEWER_CLOUD_JSON}")
+    return len(hourly)
 
 
 def fetch_noaa_snowfall() -> list[dict] | None:
@@ -1552,6 +1598,10 @@ def main():
                 conn.commit()  # Commit before metrics to avoid lock
                 metrics.item_succeeded('digital_forecast', records_inserted=len(digital_data),
                                        item_type='nws_digital')
+                try:
+                    export_cloud_forecast_for_viewer(conn)
+                except Exception as e:
+                    logger.warning(f"Cloud forecast export for satellite viewer failed: {e}")
             else:
                 logger.error("No digital forecast data to store")
                 metrics.item_failed('digital_forecast', "Failed to fetch digital forecast",
